@@ -1,22 +1,16 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const firebase = require('firebase-admin');
 const shortid = require('shortid');
 const path = require('path');
 const app = express();
 
-// الاتصال بـ MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost/url-shortener', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
+// تهيئة Firebase
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+firebase.initializeApp({
+    credential: firebase.credential.cert(serviceAccount),
+    databaseURL: process.env.FIREBASE_DATABASE_URL || 'https://your-project-id.firebaseio.com'
 });
-
-// نموذج قاعدة البيانات
-const UrlSchema = new mongoose.Schema({
-    longUrl: { type: String, required: true },
-    shortCode: { type: String, required: true, unique: true },
-    createdAt: { type: Date, default: Date.now }
-});
-const Url = mongoose.model('Url', UrlSchema);
+const db = firebase.database();
 
 // إعداد Express
 app.use(express.json());
@@ -34,8 +28,10 @@ app.post('/shorten', async (req, res) => {
     const shortCode = shortid.generate();
 
     try {
-        const url = new Url({ longUrl, shortCode });
-        await url.save();
+        await db.ref('links/' + shortCode).set({
+            longUrl,
+            createdAt: Date.now()
+        });
         res.json({ shortUrl: `${req.protocol}://${req.get('host')}/${shortCode}` });
     } catch (err) {
         res.status(500).json({ error: 'خطأ في الخادم' });
@@ -45,8 +41,9 @@ app.post('/shorten', async (req, res) => {
 // إعادة توجيه الرابط القصير
 app.get('/:shortCode', async (req, res) => {
     const { shortCode } = req.params;
-    const url = await Url.findOne({ shortCode });
-    if (url) {
+    const snapshot = await db.ref('links/' + shortCode).once('value');
+    const url = snapshot.val();
+    if (url && url.longUrl) {
         return res.redirect(url.longUrl);
     } else {
         res.status(404).send('الرابط غير موجود');
